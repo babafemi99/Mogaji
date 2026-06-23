@@ -8,6 +8,15 @@ It deterministically compares internal ledgers against external payment provider
 
 ---
 
+[//]: # (![Graph Asset]&#40;assets/logo.png&#41;)
+[//]: # (<img src="assets/logo.png" alt="Graph Asset" width="25%">)
+<p align="center">
+  <img src="assets/logo.png" alt="Graph Asset" width="200">
+</p>
+
+
+---
+
 ## The problem
 
 Modern payment systems distribute money flow across your application, multiple PSPs (Paystack, Flutterwave, Moniepoint), card networks, and bank settlement rails. Each system is correct in isolation. As a whole, they drift.
@@ -47,29 +56,57 @@ CSV exports (internal ledger + provider statements)
 | 1 | Reference ID match | 1.00 |
 | 2 | Weak key (amount + currency + time window) | 0.85 |
 | 3 | Amount window (amount + currency + ±Δt) | 0.70 |
-| 4 | Fee-aware (amount within declared tolerance) | 0.60 |
-| 5 | Manual review | 0.00 |
+| 4 | Manual review | 0.00 |
 
 Every match result carries the rule that produced it, its confidence level, the variance in minor units, and a full audit trail back to the source CSV row.
 
 ---
 
-## Status
+## Real output
 
-🚧 **Under active development** — not yet ready for production use.
+Running Mogaji against a 3-transaction internal ledger and a 2-transaction Paystack statement:
 
+```json
+{
+  "version": "1.0",
+  "run": {
+    "id": "2026-06-21-daily",
+    "status": "COMPLETE",
+    "currency": "NGN",
+    "summary": {
+      "total_internal": 3,
+      "total_external": 2,
+      "exact_matches": 2,
+      "missing_external": 1,
+      "total_variance_minor_units": 11250,
+      "match_rate_percent": 66.67
+    }
+  }
+}
 ```
-internal/
-├── domain/
-│   ├── transaction.go   ✓ canonical normalized transaction type
-│   ├── match.go         ✓ match result and outcome classification
-│   ├── run.go           ✓ run context, n-source support, summary
-│   └── config.go        ✓ YAML config types and field mapping
-└── ingest/
-    └── csv.go           ✓ CSV ingestion, normalization, deduplication
+
+- `ONY_001` and `ONY_002` matched via `REFERENCE_MATCH` (confidence 1.0) with variance of 7,500 and 3,750 kobo — Paystack's 1.5% settlement fee.
+- `ONY_003` flagged as `MISSING_EXTERNAL` — recorded internally, never settled by Paystack.
+- Total variance: ₦112.50 in fees across the run.
+
+---
+
+## Installation
+
+```bash
+git clone https://github.com/babafemi99/Mogaji
+cd mogaji
+go build -o mogaji ./cmd/mogaji
 ```
 
-Coming next: `finder/`, `engine/`, `report/`, CLI entrypoint.
+---
+
+## Usage
+
+```bash
+mogaji reconcile --mapping mapping.yml --out report.json
+mogaji reconcile --mapping mapping.yml --out report.json --verbose
+```
 
 ---
 
@@ -89,7 +126,8 @@ sources:
     role: internal
     file: "ledger.csv"
     timezone: "Africa/Lagos"
-    minor_units: true
+    minor_units: false
+    decimal_places: 2
     fields:
       reference_id: "txn_ref"
       amount: "amount"
@@ -99,7 +137,7 @@ sources:
 
   - name: "paystack"
     role: external
-    file: "paystack_statement.csv"
+    file: "paystack.csv"
     timezone: "UTC"
     minor_units: false
     decimal_places: 2
@@ -128,16 +166,6 @@ CSV column headers are matched with full normalization — casing, spaces, hyphe
 
 ---
 
-## Usage
-
-```bash
-mogaji reconcile \
-  --mapping mapping.yml \
-  --out report.json
-```
-
----
-
 ## Design principles
 
 - **Deterministic** — given the same inputs, Mogaji always produces the same output. No randomness, no probabilistic matching.
@@ -145,12 +173,19 @@ mogaji reconcile \
 - **Offline** — zero production latency impact. Engine failure cannot affect payment correctness.
 - **Honest about uncertainty** — weak matches are classified as weak. Ambiguous candidates are surfaced, not silently resolved.
 - **Integer money** — floating-point arithmetic is forbidden. All amounts are `int64` minor units internally.
+- **Memory efficient** — external sources are indexed in memory, internal sources are streamed row by row. Peak memory is proportional to the smaller side, not the total dataset.
+
+---
+
+## Status
+
+🚧 **Under active development** — not yet ready for production use.
 
 ---
 
 ## Contributing
 
-Mogaji is in early development. Issues and PRs welcome once the core engine is stable.
+Mogaji is in early development. Issues and PRs welcome.
 
 ---
 

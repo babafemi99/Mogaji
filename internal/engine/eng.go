@@ -9,6 +9,17 @@ import (
 	"github.com/babafemi99/Mogaji/internal/ingest"
 )
 
+const (
+	ConfidenceReferenceMatch = 1.00
+	ConfidenceWeakKeyMatch   = 0.85
+	ConfidenceAmountWindow   = 0.70
+	ConfidenceManualReview   = 0.00
+
+	RuleReferenceMatch = "REFERENCE_MATCH"
+	RuleWeakKeyMatch   = "WEAK_KEY_MATCH"
+	RuleAmountWindow   = "AMOUNT_WINDOW_MATCH"
+)
+
 // Engine is the Mogaji reconciliation engine.
 //
 // It orchestrates the full reconciliation run:
@@ -63,7 +74,7 @@ func (e *Engine) reconcile() ([]domain.Match, []domain.SourceMeta, error) {
 	var sourceMetas []domain.SourceMeta
 	var ingestErrors []ingest.RowError
 
-	// --- STEP 1: Load all external sources and build finder indexes ---
+	// Load all external sources and build finder indexes
 	var externalPool []*domain.Transaction
 
 	for _, srcCfg := range e.cfg.Sources {
@@ -82,26 +93,31 @@ func (e *Engine) reconcile() ([]domain.Match, []domain.SourceMeta, error) {
 	}
 
 	// Build finders from the external pool.
-	// Rule chain: PASS 1 → PASS 2
+	// Rule chain: 1 → 2 → 3
 	rules := []domain.Rule{
 		{
-			Name:       "REFERENCE_MATCH",
-			Confidence: 1.0,
+			Name:       RuleReferenceMatch,
+			Confidence: ConfidenceReferenceMatch,
 			Finder:     finder.NewReferenceFinder(externalPool),
 		},
 		{
-			Name:       "WEAK_KEY_MATCH",
-			Confidence: 0.85,
+			Name:       RuleWeakKeyMatch,
+			Confidence: ConfidenceWeakKeyMatch,
 			Finder:     finder.NewWeakKeyFinder(externalPool),
+		},
+		{
+			Name:       RuleAmountWindow,
+			Confidence: ConfidenceAmountWindow,
+			Finder:     finder.NewAmountWindowFinder(externalPool, e.cfg.Run.FeeTolerancePercent, e.cfg.Run.TimeWindowSeconds),
 		},
 	}
 
 	// claimed tracks which external transactions have already been matched.
 	// key: pointer to external Transaction, value: the internal tx that claimed it.
 	// Used to detect DuplicateInternal — when two internal txs match the same external tx.
-	claimed := make(map[*domain.Transaction]*domain.Transaction)
+	claimed := make(map[*domain.Transaction]struct{})
 
-	// --- STEP 2: Stream all internal sources, match each transaction ---
+	// Stream all internal sources, match each transaction
 	for _, srcCfg := range e.cfg.Sources {
 		if srcCfg.Role != domain.SourceRoleInternal {
 			continue
@@ -121,7 +137,7 @@ func (e *Engine) reconcile() ([]domain.Match, []domain.SourceMeta, error) {
 		ingestErrors = append(ingestErrors, streamResult.Errors...)
 	}
 
-	// --- STEP 3: Flag unclaimed external transactions as MissingInternal ---
+	// Flag unclaimed external transactions as MissingInternal
 	for _, tx := range externalPool {
 		if _, wasClaimed := claimed[tx]; !wasClaimed {
 			matches = append(matches, domain.Match{
@@ -146,7 +162,7 @@ func (e *Engine) reconcile() ([]domain.Match, []domain.SourceMeta, error) {
 func (e *Engine) matchTransaction(
 	tx *domain.Transaction,
 	rules []domain.Rule,
-	claimed map[*domain.Transaction]*domain.Transaction,
+	claimed map[*domain.Transaction]struct{},
 ) domain.Match {
 	for _, rule := range rules {
 		candidates := rule.Finder.FindCandidates(tx)
@@ -177,7 +193,7 @@ func (e *Engine) matchTransaction(
 			}
 
 			// Claim it.
-			claimed[candidate] = tx
+			claimed[candidate] = struct{}{}
 
 			return domain.Match{
 				Internal:   tx,
@@ -205,7 +221,7 @@ func (e *Engine) matchTransaction(
 
 		if len(unclaimed) == 1 {
 			// Only one unclaimed candidate left — claim it.
-			claimed[unclaimed[0]] = tx
+			claimed[unclaimed[0]] = struct{}{}
 			return domain.Match{
 				Internal:   tx,
 				External:   unclaimed[0],

@@ -1,6 +1,10 @@
 package domain
 
-import "time"
+import (
+	"time"
+
+	"github.com/babafemi99/Mogaji/sancho"
+)
 
 // RunStatus describes the current state of a reconciliation run.
 type RunStatus string
@@ -34,6 +38,19 @@ const (
 	// e.g. Paystack settlement CSV, Flutterwave payout report, bank statement.
 	SourceRoleExternal SourceRole = "external"
 )
+
+func (s SourceRole) String() string {
+	return string(s)
+}
+
+func (s SourceRole) Validate() error {
+	switch s {
+	case SourceRoleInternal, SourceRoleExternal:
+		return nil
+	default:
+		return sancho.ErrInvalidSourceRole
+	}
+}
 
 // SourceMeta describes a single input source in a reconciliation run.
 // A run may have any number of sources on either side.

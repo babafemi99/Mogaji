@@ -17,16 +17,6 @@ import (
 //	go build -ldflags "-X main.version=1.0.0" ./cmd/mogaji
 var version = "dev"
 
-// banner is printed before every command.
-const banner = `
- _ _ 
- _ __ ___   ___   __ _  __ _ (_|_)
-| '_ ` + "`" + ` _ \ / _ \ / _` + "`" + ` |/ _` + "`" + ` || | |
-| | | | | | (_) | (_| | (_| || | |
-|_| |_| |_|\___/ \__, |\__,_|/ |_|
-                 |___/     |__/   
-`
-
 func rootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:           "mogaji",
@@ -199,46 +189,17 @@ func loadConfig(path string) (domain.Config, error) {
 
 // validateConfig checks that a parsed Config is usable before running.
 func validateConfig(cfg domain.Config) error {
-	if cfg.Run.ID == "" {
-		return fmt.Errorf("run.id is required")
-	}
-	if cfg.Run.Currency == "" {
-		return fmt.Errorf("run.currency is required")
+	if err := cfg.Run.Validate(); err != nil {
+		return err
 	}
 	if len(cfg.Sources) == 0 {
 		return fmt.Errorf("at least one source is required")
 	}
 
-	var hasInternal, hasExternal bool
 	for i, src := range cfg.Sources {
-		if src.Name == "" {
-			return fmt.Errorf("sources[%d]: name is required", i)
+		if err := src.Validate(); err != nil {
+			return fmt.Errorf("failed to validate source[%d]: %w", i, err)
 		}
-		if src.File == "" {
-			return fmt.Errorf("source %q: file is required", src.Name)
-		}
-		if src.Timezone == "" {
-			return fmt.Errorf("source %q: timezone is required", src.Name)
-		}
-		if src.Fields.Amount == "" {
-			return fmt.Errorf("source %q: fields.amount is required", src.Name)
-		}
-		if src.Fields.Timestamp == "" {
-			return fmt.Errorf("source %q: fields.timestamp is required", src.Name)
-		}
-		if src.Role == domain.SourceRoleInternal {
-			hasInternal = true
-		}
-		if src.Role == domain.SourceRoleExternal {
-			hasExternal = true
-		}
-	}
-
-	if !hasInternal {
-		return fmt.Errorf("at least one source with role: internal is required")
-	}
-	if !hasExternal {
-		return fmt.Errorf("at least one source with role: external is required")
 	}
 
 	return nil

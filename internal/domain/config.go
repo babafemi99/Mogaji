@@ -1,5 +1,15 @@
 package domain
 
+import (
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"github.com/babafemi99/Mogaji/sancho"
+)
+
 // Config is the validated, parsed representation of the YAML mapping file.
 //
 // It is the single source of truth for how a reconciliation run behaves —
@@ -41,6 +51,16 @@ type RunConfig struct {
 	FeeTolerancePercent float64 `yaml:"fee_tolerance_percent"`
 }
 
+func (c RunConfig) Validate() error {
+	if c.ID == "" {
+		return sancho.ErrRunIDRequired
+	}
+	if c.Currency == "" {
+		return sancho.ErrRunCurrencyRequired
+	}
+	return nil
+}
+
 // SourceConfig describes a single input source and how to read it.
 // Maps directly to one entry under `sources:` in the YAML file.
 type SourceConfig struct {
@@ -79,6 +99,55 @@ type SourceConfig struct {
 	Fields FieldMapping `yaml:"fields"`
 }
 
+func (s SourceConfig) Validate() error {
+
+	if err := s.Fields.Validate(); err != nil {
+		return err
+	}
+
+	if s.Name == "" {
+		return sancho.ErrSourceNameRequired
+	}
+
+	if err := s.Role.Validate(); err != nil {
+		return err
+	}
+
+	if err := validateFilePath(s.File); err != nil {
+		return err
+	}
+
+	if s.Timezone == "" {
+		return sancho.ErrSourceTimezoneRequired
+	}
+
+	if !s.MinorUnits && s.DecimalPlaces < 0 {
+		return sancho.ErrInvalidDecimalPlaces
+	}
+
+	if err := s.Fields.Validate(); err != nil {
+		return err
+	}
+
+	var hasInternal, hasExternal bool
+
+	if s.Role == SourceRoleInternal {
+		hasInternal = true
+	}
+	if s.Role == SourceRoleExternal {
+		hasExternal = true
+	}
+
+	if !hasInternal {
+		return sancho.ErrInternalSourceRequired
+	}
+	if !hasExternal {
+		return sancho.ErrExternalSourceRequired
+	}
+
+	return nil
+}
+
 // FieldMapping maps Mogaji's canonical field names to the actual CSV column headers
 // for a given source. Every source has its own mapping because providers
 // name their columns differently.
@@ -108,4 +177,46 @@ type FieldMapping struct {
 	// Optional. If empty, RawStatus will be empty string on all transactions
 	// from this source.
 	Status string `yaml:"status"`
+}
+
+func (f FieldMapping) Validate() error {
+	if f.Amount == "" {
+		return sancho.ErrAmountRequired
+	}
+
+	if f.Timestamp == "" {
+		return sancho.ErrTimeStampRequired
+	}
+
+	return nil
+}
+
+func validateFilePath(path string) error {
+	if strings.TrimSpace(path) == "" {
+		return errors.New("file_path is required")
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("file %q does not exist", path)
+		}
+		return fmt.Errorf("cannot access file %q: %w", path, err)
+	}
+
+	if info.IsDir() {
+		return fmt.Errorf("%q is a directory, expected a CSV file", path)
+	}
+
+	if !strings.EqualFold(filepath.Ext(path), ".csv") {
+		return fmt.Errorf("%q must be a .csv file", path)
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("cannot open %q: %w", path, err)
+	}
+	defer f.Close()
+
+	return nil
 }

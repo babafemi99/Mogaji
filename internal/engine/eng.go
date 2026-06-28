@@ -152,18 +152,15 @@ func (e *Engine) reconcile() ([]domain.Match, []domain.SourceMeta, error) {
 
 	// Append ingest errors as MissingExternal matches so they appear in the report.
 	// These are rows that failed to parse — they couldn't participate in matching.
-	_ = ingestErrors // surfaced in report via SourceMeta — TODO: attach to Run in report layer
+	_ = ingestErrors // surfaced in report via SourceMeta — TODO: attach to Run in report layer:femi
 
 	return matches, sourceMetas, nil
 }
 
 // matchTransaction runs a single internal transaction through the rule chain.
 // Returns the best match found, or a MissingExternal match if no rule fires.
-func (e *Engine) matchTransaction(
-	tx *domain.Transaction,
-	rules []domain.Rule,
-	claimed map[*domain.Transaction]struct{},
-) domain.Match {
+func (e *Engine) matchTransaction(tx *domain.Transaction, rules []domain.Rule,
+	claimed map[*domain.Transaction]struct{}) domain.Match {
 	for _, rule := range rules {
 		candidates := rule.Finder.FindCandidates(tx)
 		if len(candidates) == 0 {
@@ -179,7 +176,7 @@ func (e *Engine) matchTransaction(
 				// Two internal transactions matched the same external transaction.
 				// Retroactively update the first match to DuplicateInternal.
 				// Mark the current tx as DuplicateInternal too.
-				_ = claimedBy // used for audit trail in future — TODO: update prior match
+				_ = claimedBy // used for audit trail in future — (TODO: update prior match:femi)
 
 				return domain.Match{
 					Internal:   tx,

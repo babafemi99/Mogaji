@@ -11,7 +11,11 @@ import (
 	"time"
 
 	"github.com/babafemi99/Mogaji/internal/domain"
+	"github.com/babafemi99/Mogaji/sancho"
 )
+
+const headerRowNumber = 1
+const defaultDecimalPlaces = 2
 
 // RowError records a single row that failed to parse during ingestion.
 // Rows with errors are skipped — they never enter the transaction pool.
@@ -21,12 +25,16 @@ type RowError struct {
 	SourceFile string   `json:"source_file"`
 	RowNumber  int      `json:"row_number"`
 	Reason     string   `json:"reason"`
+	Err        error    `json:"-"`
 	RawRow     []string `json:"raw_row"`
 }
 
-// IngestResult is the output of a LoadCSV call.
+func (e *RowError) Unwrap() error { return e.Err }
+func (e *RowError) Error() string { return e.Reason }
+
+// Result is the output of a LoadCSV call.
 // All transactions are held in memory — use for the side being indexed.
-type IngestResult struct {
+type Result struct {
 	Transactions []*domain.Transaction
 	Meta         domain.SourceMeta
 	Errors       []RowError
@@ -52,8 +60,8 @@ type columnPositions struct {
 // LoadCSV reads an entire CSV into memory as []*Transaction.
 // Use this for the side being indexed (typically the smaller/external source).
 // For large files, use StreamCSV instead.
-func LoadCSV(cfg domain.SourceConfig, runCurrency string) (IngestResult, error) {
-	result := IngestResult{Errors: []RowError{}}
+func LoadCSV(cfg domain.SourceConfig, runCurrency string) (Result, error) {
+	var result Result
 
 	loc, colIndex, cols, multiplier, err := prepareSource(cfg)
 	if err != nil {
@@ -74,7 +82,8 @@ func LoadCSV(cfg domain.SourceConfig, runCurrency string) (IngestResult, error) 
 	_ = colIndex // used inside prepareSource
 
 	seen := make(map[string]int)
-	rowNumber := 1
+
+	rowNumber := headerRowNumber
 	totalLoaded := 0
 	duplicatesSkipped := 0
 
@@ -86,9 +95,11 @@ func LoadCSV(cfg domain.SourceConfig, runCurrency string) (IngestResult, error) 
 		}
 		if err != nil {
 			result.Errors = append(result.Errors, RowError{
-				SourceName: cfg.Name, SourceFile: cfg.File,
-				RowNumber: rowNumber,
-				Reason:    fmt.Sprintf("CSV read error: %s", err.Error()),
+				SourceName: cfg.Name,
+				SourceFile: cfg.File,
+				RowNumber:  rowNumber,
+				Reason:     fmt.Sprintf("CSV read error: %s", err.Error()),
+				Err:        sancho.ErrCSVReadError,
 			})
 			continue
 		}
@@ -106,6 +117,7 @@ func LoadCSV(cfg domain.SourceConfig, runCurrency string) (IngestResult, error) 
 					SourceName: cfg.Name, SourceFile: cfg.File,
 					RowNumber: rowNumber,
 					Reason:    fmt.Sprintf("duplicate reference_id %q — first seen at row %d, skipping", tx.ReferenceID, firstRow),
+					Err:       sancho.ErrDuplicateReference,
 					RawRow:    row,
 				})
 				duplicatesSkipped++
@@ -169,6 +181,7 @@ func StreamCSV(cfg domain.SourceConfig, runCurrency string, fn func(*domain.Tran
 				SourceName: cfg.Name, SourceFile: cfg.File,
 				RowNumber: rowNumber,
 				Reason:    fmt.Sprintf("CSV read error: %s", err.Error()),
+				Err:       sancho.ErrCSVReadError,
 			})
 			continue
 		}
@@ -186,6 +199,7 @@ func StreamCSV(cfg domain.SourceConfig, runCurrency string, fn func(*domain.Tran
 					SourceName: cfg.Name, SourceFile: cfg.File,
 					RowNumber: rowNumber,
 					Reason:    fmt.Sprintf("duplicate reference_id %q — first seen at row %d, skipping", tx.ReferenceID, firstRow),
+					Err:       sancho.ErrDuplicateReference,
 					RawRow:    row,
 				})
 				duplicatesSkipped++
@@ -216,12 +230,14 @@ func StreamCSV(cfg domain.SourceConfig, runCurrency string, fn func(*domain.Tran
 func prepareSource(cfg domain.SourceConfig) (*time.Location, map[string]int, columnPositions, int64, error) {
 	loc, err := time.LoadLocation(cfg.Timezone)
 	if err != nil {
-		return nil, nil, columnPositions{}, 0, fmt.Errorf("source %q: invalid timezone %q: %w", cfg.Name, cfg.Timezone, err)
+		return nil, nil, columnPositions{}, 0, fmt.Errorf("%w %q: %w",
+			sancho.ErrInvalidTimezone, cfg.Timezone, err)
 	}
 
 	f, err := os.Open(cfg.File)
 	if err != nil {
-		return nil, nil, columnPositions{}, 0, fmt.Errorf("source %q: cannot open file %q: %w", cfg.Name, cfg.File, err)
+		return nil, nil, columnPositions{}, 0, fmt.Errorf("%w %q: %w",
+			sancho.ErrFileNotFound, cfg.File, err)
 	}
 	defer f.Close()
 
@@ -245,7 +261,7 @@ func prepareSource(cfg domain.SourceConfig) (*time.Location, map[string]int, col
 
 	decimalPlaces := cfg.DecimalPlaces
 	if decimalPlaces == 0 {
-		decimalPlaces = 2
+		decimalPlaces = defaultDecimalPlaces
 	}
 	multiplier := int64(math.Pow10(decimalPlaces))
 
@@ -256,12 +272,20 @@ func prepareSource(cfg domain.SourceConfig) (*time.Location, map[string]int, col
 func resolveColumns(cfg domain.SourceConfig, colIndex map[string]int) (columnPositions, error) {
 	amountCol, ok := colIndex[normalizeHeader(cfg.Fields.Amount)]
 	if !ok {
-		return columnPositions{}, fmt.Errorf("amount column %q (normalized: %q) not found in CSV headers", cfg.Fields.Amount, normalizeHeader(cfg.Fields.Amount))
+		return columnPositions{}, fmt.Errorf("%w: %q (normalized: %q)",
+			sancho.ErrAmountColumnNotFound,
+			cfg.Fields.Amount,
+			normalizeHeader(cfg.Fields.Amount),
+		)
 	}
 
 	timestampCol, ok := colIndex[normalizeHeader(cfg.Fields.Timestamp)]
 	if !ok {
-		return columnPositions{}, fmt.Errorf("timestamp column %q (normalized: %q) not found in CSV headers", cfg.Fields.Timestamp, normalizeHeader(cfg.Fields.Timestamp))
+		return columnPositions{}, fmt.Errorf("%w: %q (normalized: %q)",
+			sancho.ErrTimestampColumnNotFound,
+			cfg.Fields.Timestamp,
+			normalizeHeader(cfg.Fields.Timestamp),
+		)
 	}
 
 	return columnPositions{
@@ -273,21 +297,16 @@ func resolveColumns(cfg domain.SourceConfig, colIndex map[string]int) (columnPos
 	}, nil
 }
 
-// parseRow parses a single CSV row into a canonical Transaction.
-// Returns a RowError if the row cannot be parsed.
-func parseRow(
-	row []string,
-	rowNumber int,
-	cfg domain.SourceConfig,
-	cols columnPositions,
-	runCurrency string,
-	multiplier int64,
-	loc *time.Location,
-) (*domain.Transaction, *RowError) {
-	rowErr := func(reason string) *RowError {
+func parseRow(row []string, rowNumber int, cfg domain.SourceConfig, cols columnPositions,
+	runCurrency string, multiplier int64, loc *time.Location) (*domain.Transaction, *RowError) {
+	rowErr := func(err error, reason string) *RowError {
 		return &RowError{
-			SourceName: cfg.Name, SourceFile: cfg.File,
-			RowNumber: rowNumber, Reason: reason, RawRow: row,
+			SourceName: cfg.Name,
+			SourceFile: cfg.File,
+			RowNumber:  rowNumber,
+			Reason:     reason,
+			Err:        err,
+			RawRow:     row,
 		}
 	}
 
@@ -303,23 +322,38 @@ func parseRow(
 		}
 	}
 	if currency != runCurrency {
-		return nil, rowErr(fmt.Sprintf("currency mismatch: row has %q but run enforces %q", currency, runCurrency))
+		return nil, rowErr(
+			sancho.ErrCurrencyMismatch,
+			fmt.Sprintf("currency mismatch: row has %q but run enforces %q", currency, runCurrency),
+		)
 	}
 
 	if cols.amount >= len(row) {
-		return nil, rowErr("row has fewer columns than expected — amount column missing")
+		return nil, rowErr(
+			sancho.ErrAmountColumnMissing,
+			"row has fewer columns than expected — amount column missing",
+		)
 	}
 	amountMinorUnits, err := parseAmount(strings.TrimSpace(row[cols.amount]), cfg.MinorUnits, multiplier)
 	if err != nil {
-		return nil, rowErr(fmt.Sprintf("invalid amount %q: %s", row[cols.amount], err.Error()))
+		return nil, rowErr(
+			sancho.ErrInvalidAmount,
+			fmt.Sprintf("invalid amount %q: %s", row[cols.amount], err.Error()),
+		)
 	}
 
 	if cols.timestamp >= len(row) {
-		return nil, rowErr("row has fewer columns than expected — timestamp column missing")
+		return nil, rowErr(
+			sancho.ErrTimestampColumnMissing,
+			"row has fewer columns than expected — timestamp column missing",
+		)
 	}
 	timestamp, err := parseTimestamp(strings.TrimSpace(row[cols.timestamp]), loc)
 	if err != nil {
-		return nil, rowErr(fmt.Sprintf("invalid timestamp %q: %s", row[cols.timestamp], err.Error()))
+		return nil, rowErr(
+			sancho.ErrInvalidTimestamp,
+			fmt.Sprintf("invalid timestamp %q: %s", row[cols.timestamp], err.Error()),
+		)
 	}
 
 	rawStatus := ""
@@ -365,9 +399,8 @@ func buildColumnIndex(headers []string) (map[string]int, error) {
 			continue
 		}
 		if original, exists := seen[norm]; exists {
-			return nil, fmt.Errorf(
-				"ambiguous CSV headers: %q and %q both normalize to %q — rename one column",
-				original, h, norm,
+			return nil, fmt.Errorf("%w: %q and %q both normalize to %q — rename one column",
+				sancho.ErrAmbiguousHeaders, original, h, norm,
 			)
 		}
 		seen[norm] = h
@@ -414,20 +447,20 @@ func parseAmount(raw string, minorUnits bool, multiplier int64) (int64, error) {
 	if minorUnits {
 		val, err := strconv.ParseInt(raw, 10, 64)
 		if err != nil {
-			return 0, fmt.Errorf("expected integer minor units, got %q", raw)
+			return 0, fmt.Errorf("%w: got %q", sancho.ErrInvalidMinorUnits, raw)
 		}
 		if val < 0 {
-			return 0, fmt.Errorf("negative amounts are not supported, got %d", val)
+			return 0, fmt.Errorf("%w: got %d", sancho.ErrNegativeAmount, val)
 		}
 		return val, nil
 	}
 
 	val, err := strconv.ParseFloat(raw, 64)
 	if err != nil {
-		return 0, fmt.Errorf("expected decimal amount, got %q", raw)
+		return 0, fmt.Errorf("%w: got %q", sancho.ErrInvalidDecimalAmount, raw)
 	}
 	if val < 0 {
-		return 0, fmt.Errorf("negative amounts are not supported, got %f", val)
+		return 0, fmt.Errorf("%w: got %g", sancho.ErrNegativeAmount, val)
 	}
 
 	return int64(math.Round(val * float64(multiplier))), nil
@@ -454,5 +487,5 @@ func parseTimestamp(raw string, loc *time.Location) (time.Time, error) {
 		}
 	}
 
-	return time.Time{}, fmt.Errorf("unrecognised datetime format %q — supported formats: ISO 8601, YYYY-MM-DD HH:MM:SS, DD/MM/YYYY HH:MM:SS", raw)
+	return time.Time{}, fmt.Errorf("%w: %q — supported formats: ISO 8601, YYYY-MM-DD HH:MM:SS, DD/MM/YYYY HH:MM:SS", sancho.ErrUnrecognisedTimestamp, raw)
 }

@@ -87,8 +87,9 @@ func runReconcile(mappingPath, outputPath string, verbose bool) error {
 		return err
 	}
 
-	if err := validateConfig(cfg); err != nil {
+	if err := cfg.Validate(); err != nil {
 		fmt.Fprintf(os.Stderr, "%s invalid mapping file: %s\n", aurora.Red("✗"), err)
+		fmt.Fprint(os.Stderr, cfg)
 		return err
 	}
 
@@ -103,7 +104,7 @@ func runReconcile(mappingPath, outputPath string, verbose bool) error {
 	run := eng.Run()
 
 	// --- Write report ---
-	if err := report.Write(run, nil, outputPath); err != nil {
+	if err := report.Write(run, outputPath); err != nil {
 		fmt.Fprintf(os.Stderr, "%s failed to write report: %s\n", aurora.Red("✗"), err)
 		return err
 	}

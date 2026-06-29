@@ -51,7 +51,7 @@ func (e *Engine) Run() domain.Run {
 		Matches:   []domain.Match{},
 	}
 
-	matches, sources, err := e.reconcile()
+	matches, sources, parseErrors, err := e.reconcile()
 	if err != nil {
 		run.Status = domain.RunStatusFailed
 		run.Error = err.Error()
@@ -64,12 +64,14 @@ func (e *Engine) Run() domain.Run {
 	run.Summary = computeSummary(matches, sources)
 	run.Status = domain.RunStatusComplete
 	run.CompletedAt = time.Now().UTC()
+	run.ParseErrors = parseErrors
 
 	return run
 }
 
 // reconcile is the core logic. Separated from Run() to keep error handling clean.
-func (e *Engine) reconcile() ([]domain.Match, []domain.SourceMeta, error) {
+func (e *Engine) reconcile() ([]domain.Match, []domain.SourceMeta, []domain.ParseError, error) {
+
 	var matches []domain.Match
 	var sourceMetas []domain.SourceMeta
 	var ingestErrors []ingest.RowError
@@ -84,7 +86,7 @@ func (e *Engine) reconcile() ([]domain.Match, []domain.SourceMeta, error) {
 
 		result, err := ingest.LoadCSV(srcCfg, e.cfg.Run.Currency)
 		if err != nil {
-			return nil, nil, fmt.Errorf("failed to load external source %q: %w", srcCfg.Name, err)
+			return nil, nil, nil, fmt.Errorf("failed to load external source %q: %w", srcCfg.Name, err)
 		}
 
 		sourceMetas = append(sourceMetas, result.Meta)
@@ -130,7 +132,7 @@ func (e *Engine) reconcile() ([]domain.Match, []domain.SourceMeta, error) {
 		})
 
 		if err != nil {
-			return nil, nil, fmt.Errorf("failed to stream internal source %q: %w", srcCfg.Name, err)
+			return nil, nil, nil, fmt.Errorf("failed to stream internal source %q: %w", srcCfg.Name, err)
 		}
 
 		sourceMetas = append(sourceMetas, streamResult.Meta)
@@ -152,9 +154,12 @@ func (e *Engine) reconcile() ([]domain.Match, []domain.SourceMeta, error) {
 
 	// Append ingest errors as MissingExternal matches so they appear in the report.
 	// These are rows that failed to parse — they couldn't participate in matching.
-	_ = ingestErrors // surfaced in report via SourceMeta — TODO: attach to Run in report layer:femi
+	var parseErrors []domain.ParseError
+	for _, rowErr := range ingestErrors {
+		parseErrors = append(parseErrors, toParseError(rowErr))
+	}
+	return matches, sourceMetas, parseErrors, nil
 
-	return matches, sourceMetas, nil
 }
 
 // matchTransaction runs a single internal transaction through the rule chain.
@@ -285,4 +290,14 @@ func computeSummary(matches []domain.Match, sources []domain.SourceMeta) domain.
 	}
 
 	return summary
+}
+
+func toParseError(e ingest.RowError) domain.ParseError {
+	return domain.ParseError{
+		SourceName: e.SourceName,
+		SourceFile: e.SourceFile,
+		RowNumber:  e.RowNumber,
+		Reason:     e.Reason,
+		RawRow:     e.RawRow,
+	}
 }

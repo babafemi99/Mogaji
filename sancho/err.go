@@ -65,4 +65,6 @@ var (
 
 	ErrCSVReadError       = errors.New("CSV read error")
 	ErrDuplicateReference = errors.New("duplicate reference_id")
+
+	ErrNoSourcesDeclared = errors.New("no sources declared in config")
 )

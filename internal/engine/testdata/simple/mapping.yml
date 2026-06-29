@@ -1,0 +1,32 @@
+run:
+  id: "2026-06-21-daily"
+  currency: "NGN"
+  time_window_seconds: 86400
+  fee_tolerance_percent: 1.5
+
+sources:
+  - name: "internal_ledger"
+    role: internal
+    file: "internal.csv"        # ← was external.csv
+    timezone: "Africa/Lagos"
+    minor_units: false
+    decimal_places: 2
+    fields:
+      reference_id: "txn_ref"
+      amount: "amount"
+      currency: "currency"
+      timestamp: "created_at"
+      status: "status"
+
+  - name: "paystack"
+    role: external
+    file: "external.csv"        # ← was internal.csv
+    timezone: "UTC"
+    minor_units: false
+    decimal_places: 2
+    fields:
+      reference_id: "Transaction ID"
+      amount: "Settled Amount"
+      currency: "Currency"
+      timestamp: "Transaction Date"
+      status: "Status"

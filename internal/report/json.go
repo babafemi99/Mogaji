@@ -1,6 +1,7 @@
 package report
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -8,6 +9,9 @@ import (
 
 	"github.com/babafemi99/Mogaji/internal/domain"
 	"github.com/babafemi99/Mogaji/internal/ingest"
+	"github.com/logrusorgru/aurora/v4"
+	"github.com/olekukonko/tablewriter"
+	"github.com/olekukonko/tablewriter/tw"
 )
 
 // Report is the top-level JSON output structure written to disk.
@@ -36,11 +40,10 @@ type Report struct {
 //
 // The JSON is pretty-printed for human readability —
 // these reports are read by finance teams and auditors, not just machines.
-func Write(run domain.Run, ingestErrors []ingest.RowError, outputPath string) error {
+func Write(run domain.Run, outputPath string) error {
 	report := Report{
-		Version:      "1.0",
-		Run:          run,
-		IngestErrors: ingestErrors,
+		Version: "1.0",
+		Run:     run,
 	}
 
 	// Ensure parent directories exist.
@@ -74,40 +77,80 @@ func Write(run domain.Run, ingestErrors []ingest.RowError, outputPath string) er
 // Summary returns a human-readable summary string of a completed run.
 // Used for CLI stdout output after the report is written.
 func Summary(run domain.Run) string {
+	var buf bytes.Buffer
 	s := run.Summary
-	return fmt.Sprintf(`
-Mogaji Reconciliation Report
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Run ID       : %s
-Status       : %s
-Currency     : %s
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Internal txs : %d
-External txs : %d
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Exact matches     : %d
-Ambiguous         : %d
-Duplicate internal: %d
-Duplicate external: %d
-Missing external  : %d
-Missing internal  : %d
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Match rate        : %.2f%%
-Total variance    : %d minor units
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-`,
-		run.ID,
-		run.Status,
-		run.Currency,
-		s.TotalInternal,
-		s.TotalExternal,
-		s.ExactMatches,
-		s.AmbiguousMatches,
-		s.DuplicateInternal,
-		s.DuplicateExternal,
-		s.MissingExternal,
-		s.MissingInternal,
-		s.MatchRatePercent,
-		s.TotalVarianceMinor,
-	)
+
+	// Identity
+	fmt.Fprintf(&buf, "  Run ID   : %s\n", aurora.Bold(run.ID))
+	fmt.Fprintf(&buf, "  Status   : %s\n", colorStatus(run.Status))
+	fmt.Fprintf(&buf, "  Currency : %s\n\n", aurora.Bold(run.Currency))
+
+	// Sources table
+	fmt.Fprintln(&buf, aurora.Bold("  Sources"))
+	srcTable := tablewriter.NewTable(&buf, tablewriter.WithConfig(tablewriter.Config{
+		Row: tw.CellConfig{
+			Alignment: tw.CellAlignment{
+				PerColumn: []tw.Align{tw.AlignLeft, tw.AlignRight},
+			},
+		},
+	}))
+	srcTable.Header([]string{"Side", "Transactions"})
+	srcTable.Append([]string{"Internal", fmt.Sprintf("%d", s.TotalInternal)})
+	srcTable.Append([]string{"External", fmt.Sprintf("%d", s.TotalExternal)})
+	srcTable.Render()
+
+	// Results table
+	fmt.Fprintln(&buf, aurora.Bold("\n  Results"))
+	resTable := tablewriter.NewTable(&buf, tablewriter.WithConfig(tablewriter.Config{
+		Row: tw.CellConfig{
+			Alignment: tw.CellAlignment{
+				PerColumn: []tw.Align{tw.AlignLeft, tw.AlignRight},
+			},
+		},
+	}))
+	resTable.Header([]string{"Outcome", "Count"})
+	resTable.Bulk([][]string{
+		{fmt.Sprint(aurora.Green("Exact Match")), fmt.Sprintf("%d", s.ExactMatches)},
+		{fmt.Sprint(aurora.Yellow("Ambiguous")), fmt.Sprintf("%d", s.AmbiguousMatches)},
+		{fmt.Sprint(aurora.Yellow("Missing External")), fmt.Sprintf("%d", s.MissingExternal)},
+		{fmt.Sprint(aurora.Yellow("Missing Internal")), fmt.Sprintf("%d", s.MissingInternal)},
+		{fmt.Sprint(aurora.Red("Duplicate Internal")), fmt.Sprintf("%d", s.DuplicateInternal)},
+		{fmt.Sprint(aurora.Red("Duplicate External")), fmt.Sprintf("%d", s.DuplicateExternal)},
+	})
+	resTable.Render()
+
+	// Footer stats
+	var matchColor func(arg interface{}) aurora.Value
+	switch {
+	case s.MatchRatePercent >= 95:
+		matchColor = aurora.Green
+	case s.MatchRatePercent >= 80:
+		matchColor = aurora.Yellow
+	default:
+		matchColor = aurora.Red
+	}
+
+	fmt.Fprintf(&buf, "\n  Match rate    : %s%%\n",
+		matchColor(fmt.Sprintf("%.2f", s.MatchRatePercent)))
+	fmt.Fprintf(&buf, "  Total variance: %s\n",
+		aurora.Bold(fmt.Sprintf("₦%.2f", float64(s.TotalVarianceMinor)/100)))
+
+	if len(run.ParseErrors) > 0 {
+		fmt.Fprintf(&buf, "  Parse errors  : %s rows skipped during ingestion\n",
+			aurora.Yellow(fmt.Sprintf("%d", len(run.ParseErrors))))
+	}
+
+	fmt.Fprintln(&buf)
+	return buf.String()
+}
+
+func colorStatus(status domain.RunStatus) aurora.Value {
+	switch status {
+	case domain.RunStatusComplete:
+		return aurora.Green(string(status))
+	case domain.RunStatusFailed:
+		return aurora.Red(string(status))
+	default:
+		return aurora.Yellow(string(status))
+	}
 }

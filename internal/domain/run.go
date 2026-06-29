@@ -122,6 +122,8 @@ type Run struct {
 	// Error holds the fatal error message if Status is RunStatusFailed.
 	// Empty string otherwise.
 	Error string `json:"error,omitempty"`
+
+	ParseErrors []ParseError `json:"parse_errors,omitempty"`
 }
 
 // RunSummary is a pre-computed breakdown of match outcomes for a completed run.
@@ -138,4 +140,12 @@ type RunSummary struct {
 	MissingInternal    int     `json:"missing_internal"`
 	TotalVarianceMinor int64   `json:"total_variance_minor_units"`
 	MatchRatePercent   float64 `json:"match_rate_percent"`
+}
+
+type ParseError struct {
+	SourceName string   `json:"source_name"`
+	SourceFile string   `json:"source_file"`
+	RowNumber  int      `json:"row_number"`
+	Reason     string   `json:"reason"`
+	RawRow     []string `json:"raw_row"`
 }

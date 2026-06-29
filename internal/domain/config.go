@@ -27,6 +27,38 @@ type Config struct {
 	Sources []SourceConfig `yaml:"sources"`
 }
 
+func (c Config) Validate() error {
+	if err := c.Run.Validate(); err != nil {
+		return err
+	}
+
+	if len(c.Sources) == 0 {
+		return sancho.ErrNoSourcesDeclared
+	}
+
+	var hasInternal, hasExternal bool
+	for i, src := range c.Sources {
+		if err := src.Validate(); err != nil {
+			return fmt.Errorf("failed to validate source[%d]: %w", i, err)
+		}
+		if src.Role == SourceRoleInternal {
+			hasInternal = true
+		}
+		if src.Role == SourceRoleExternal {
+			hasExternal = true
+		}
+	}
+
+	if !hasInternal {
+		return sancho.ErrInternalSourceRequired
+	}
+	if !hasExternal {
+		return sancho.ErrExternalSourceRequired
+	}
+
+	return nil
+}
+
 // RunConfig holds the identity and policy settings for a reconciliation run.
 type RunConfig struct {
 	// ID is a unique identifier for this run.
@@ -127,22 +159,6 @@ func (s SourceConfig) Validate() error {
 
 	if err := s.Fields.Validate(); err != nil {
 		return err
-	}
-
-	var hasInternal, hasExternal bool
-
-	if s.Role == SourceRoleInternal {
-		hasInternal = true
-	}
-	if s.Role == SourceRoleExternal {
-		hasExternal = true
-	}
-
-	if !hasInternal {
-		return sancho.ErrInternalSourceRequired
-	}
-	if !hasExternal {
-		return sancho.ErrExternalSourceRequired
 	}
 
 	return nil

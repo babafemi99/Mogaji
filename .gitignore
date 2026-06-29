@@ -33,7 +33,7 @@ go.work.sum
 /tmp
 tmp/
 report.json
-rr.md
+README.md
 
 # CSV files — ignored globally except in examples/
 *.csv

@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/babafemi99/Mogaji/internal/domain"
 	"github.com/babafemi99/Mogaji/internal/engine"
@@ -120,7 +121,7 @@ func runReconcile(mappingPath, outputPath string, verbose bool) error {
 			aurora.Red("✗"),
 			run.Error,
 		)
-		return fmt.Errorf(run.Error)
+		return fmt.Errorf("%s", run.Error)
 	}
 
 	// --- Print result ---
@@ -183,6 +184,12 @@ func loadConfig(path string) (domain.Config, error) {
 	var cfg domain.Config
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return domain.Config{}, fmt.Errorf("cannot parse YAML: %w", err)
+	}
+	mappingDir := filepath.Dir(path)
+	for i := range cfg.Sources {
+		if !filepath.IsAbs(cfg.Sources[i].File) {
+			cfg.Sources[i].File = filepath.Join(mappingDir, cfg.Sources[i].File)
+		}
 	}
 
 	return cfg, nil
